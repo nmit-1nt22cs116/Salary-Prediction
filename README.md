@@ -14,7 +14,7 @@ The system can help:
 - **Prince Chaudhary** (USN: 1NT22CS143)
 - **Pradeep Badu** (USN: 1NT22CS133)  
 
-**Guide:** Dr. Saroja Devi H., Professor, Dept. of CCE  
+**Guide:** Dr. Saroja Devi H., Professor, Dept. of CSE  
 
 ---
 
