@@ -1,5 +1,5 @@
 import streamlit as st
-import pickle
+import joblib  # Changed from pickle to joblib
 import tempfile
 import os
 from datetime import datetime
@@ -100,8 +100,8 @@ def extract_experience(text):
     total_years = 0
     current_year = datetime.now().year
     date_patterns = [
-        r'(\d{4})\s*[-–—]\s*(\d{4}|Present|Current|Till date)',
-        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\s*[-–—]\s*(?:[A-Za-z]+\s+)?(\d{4}|Present|Current)'
+        r'(\d{4})\s*[-—–]\s*(\d{4}|Present|Current|Till date)',
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\s*[-—–]\s*(?:[A-Za-z]+\s+)?(\d{4}|Present|Current)'
     ]
     year_ranges = []
     for pattern in date_patterns:
@@ -156,32 +156,39 @@ def create_demo_model():
     y_train = np.array([30000, 60000, 100000, 45000, 150000, 25000, 85000, 50000])
     model = LinearRegression()
     model.fit(X_train, y_train)
-    return model
+
+    # Return artifact structure matching train_app.py
+    artifact = {
+        'model': model,
+        'pipeline': {'tfidf': None},  # Demo doesn't use TF-IDF
+        'metadata': {
+            'model_type': 'LinearRegression (Demo)',
+            'is_demo': True
+        }
+    }
+    return artifact
 
 
 def save_demo_model(path):
     try:
-        model = create_demo_model()
+        artifact = create_demo_model()
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-        with open(path, 'wb') as f:
-            pickle.dump(model, f, protocol=4)
+        joblib.dump(artifact, path)  # Use joblib instead of pickle
         return True
     except Exception as e:
         st.error(f"Error saving demo model: {str(e)}")
         return False
 
 
-def validate_pickle_file(path):
-    """Validate if a file is a valid pickle file"""
+def validate_joblib_file(path):
+    """Validate if a file is a valid joblib file"""
     try:
         with open(path, 'rb') as f:
-            # Try to read the first few bytes
-            header = f.read(2)
+            header = f.read(10)
             if not header:
                 return False, "File is empty"
-            # Valid pickle files should start with specific bytes
-            if header[0] not in [0x80, 0x28]:  # Protocol 2+ or Protocol 0-1
-                return False, "Not a valid pickle file format"
+        # Try to load it
+        joblib.load(path)
         return True, "Valid"
     except Exception as e:
         return False, str(e)
@@ -190,32 +197,46 @@ def validate_pickle_file(path):
 # ----------------- Prediction -----------------
 def predict_salary(model_path, resume_text):
     try:
-        # Validate pickle file first
-        is_valid, message = validate_pickle_file(model_path)
+        # Validate file first
+        is_valid, message = validate_joblib_file(model_path)
         if not is_valid:
-            raise ValueError(f"Invalid pickle file: {message}")
+            raise ValueError(f"Invalid model file: {message}")
 
-        # Load model with error handling
-        with open(model_path, 'rb') as f:
-            try:
-                model = pickle.load(f)
-            except (pickle.UnpicklingError, EOFError, ValueError) as e:
-                raise ValueError(
-                    f"Failed to load model: {str(e)}. The file may be corrupted or saved with incompatible Python version.")
+        # Load artifact using joblib
+        artifact = joblib.load(model_path)
+
+        # Extract model and pipeline
+        if isinstance(artifact, dict):
+            model = artifact.get('model')
+            tfidf = artifact.get('pipeline', {}).get('tfidf')
+            is_demo = artifact.get('metadata', {}).get('is_demo', False)
+        else:
+            # Fallback for old format
+            model = artifact
+            tfidf = None
+            is_demo = False
+
+        if model is None:
+            raise ValueError("Model not found in artifact")
 
         # Parse resume
         parsed = parse_resume_nlp(resume_text)
 
-        # Create features
-        features = [
-            parsed['total_experience_years'],
-            len(parsed['skills']),
-            1 if len(parsed['certifications']) > 1 else 0,
-            len(parsed['education'])
-        ]
+        # Create features based on model type
+        if is_demo or tfidf is None:
+            # Simple feature-based prediction (demo model)
+            features = [
+                parsed['total_experience_years'],
+                len(parsed['skills']),
+                1 if len(parsed['certifications']) > 1 else 0,
+                len(parsed['education'])
+            ]
+            predicted_salary = model.predict([features])[0]
+        else:
+            # TF-IDF based prediction (trained model)
+            resume_tfidf = tfidf.transform([resume_text])
+            predicted_salary = model.predict(resume_tfidf)[0]
 
-        # Predict
-        predicted_salary = model.predict([features])[0]
         return predicted_salary, parsed
 
     except Exception as e:
@@ -248,7 +269,7 @@ with col1:
                 st.error("❌ Failed to create demo model")
         else:
             # Validate existing demo model
-            is_valid, msg = validate_pickle_file(demo_path)
+            is_valid, msg = validate_joblib_file(demo_path)
             if is_valid:
                 st.success("✅ Demo Model Ready")
             else:
@@ -264,7 +285,7 @@ with col1:
             if not os.path.exists(model_path):
                 st.warning("⚠️ Model file not found at specified path.")
             else:
-                is_valid, msg = validate_pickle_file(model_path)
+                is_valid, msg = validate_joblib_file(model_path)
                 if is_valid:
                     st.success("✅ Model file found and validated")
                 else:
@@ -278,7 +299,7 @@ with col1:
                 model_path = tmp.name
 
             # Validate uploaded model
-            is_valid, msg = validate_pickle_file(model_path)
+            is_valid, msg = validate_joblib_file(model_path)
             if is_valid:
                 st.success(f"✅ Model {uploaded_model.name} uploaded and validated")
             else:
