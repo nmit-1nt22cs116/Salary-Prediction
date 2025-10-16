@@ -67,76 +67,303 @@ def extract_contact_info(text):
 
 
 def extract_skills(text):
-    doc = nlp(text)
-    matches = matcher(doc)
+    """Extract skills with better section detection and matching"""
+    # Split text into lines
+    lines = text.split('\n')
+
+    # Find skills section
+    skills_section_found = False
+    skills_lines = []
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+
+        # Detect skills section start
+        if any(keyword in line_lower for keyword in
+               ['skill', 'technical skill', 'competenc', 'technolog', 'proficienc']):
+            if len(line_lower) < 50:  # Likely a header
+                skills_section_found = True
+                continue
+
+        # Stop if we hit another major section
+        if skills_section_found and any(keyword in line_lower for keyword in
+                                        ['education', 'experience', 'work history', 'project', 'certification',
+                                         'achievement', 'personal']):
+            if len(line_lower) < 50:  # Likely a header
+                break
+
+        if skills_section_found and line.strip():
+            skills_lines.append(line.strip())
+
+    # If skills section found, search within it
     skills_found = set()
-    for match_id, start, end in matches:
-        skills_found.add(doc[start:end].text)
-    return list(skills_found) if skills_found else ["Skills not specified"]
+
+    if skills_lines:
+        skills_text = ' '.join(skills_lines).lower()
+
+        # Match skills from database
+        for skill in skill_database:
+            skill_lower = skill.lower()
+            # Use word boundary matching
+            pattern = r'\b' + re.escape(skill_lower) + r'\b'
+            if re.search(pattern, skills_text):
+                skills_found.add(skill)
+
+    # If no skills section found or no skills extracted, search entire text
+    if not skills_found:
+        doc = nlp(text)
+        matches = matcher(doc)
+        for match_id, start, end in matches:
+            skills_found.add(doc[start:end].text)
+
+    # Also do a simple string search as backup
+    if not skills_found:
+        text_lower = text.lower()
+        for skill in skill_database:
+            skill_lower = skill.lower()
+            pattern = r'\b' + re.escape(skill_lower) + r'\b'
+            if re.search(pattern, text_lower):
+                skills_found.add(skill)
+
+    return sorted(list(skills_found)) if skills_found else ["Skills not specified"]
 
 
 def extract_education(text):
-    doc = nlp(text)
+    """Extract education with better section detection"""
     education = []
-    degree_patterns = ["B.Tech", "B.E", "Bachelor", "M.Tech", "M.S", "Master", "MBA", "PhD", "Doctorate", "Diploma"]
-    for token in doc:
-        if any(d.lower() in token.text.lower() for d in degree_patterns):
-            phrase = token.text
-            education.append(phrase)
-    institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG"]]
-    education.extend(institutions)
-    return list(set(education)) if education else ["Education details not specified"]
+
+    # Split text into lines
+    lines = text.split('\n')
+
+    # Find education section
+    education_section_found = False
+    education_lines = []
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+
+        # Detect education section start
+        if any(keyword in line_lower for keyword in ['education', 'academic', 'qualification']):
+            if len(line_lower) < 50:  # Likely a header
+                education_section_found = True
+                continue
+
+        # Stop if we hit another major section
+        if education_section_found and any(keyword in line_lower for keyword in
+                                           ['experience', 'work history', 'employment', 'project', 'skill',
+                                            'certification', 'achievement']):
+            if len(line_lower) < 50:  # Likely a header
+                break
+
+        if education_section_found and line.strip():
+            education_lines.append(line.strip())
+
+    # Extract degree patterns from education section
+    degree_patterns = [
+        r'B\.?Tech', r'B\.?E\.?', r'Bachelor', r'B\.?S\.?', r'B\.?A\.?',
+        r'M\.?Tech', r'M\.?E\.?', r'M\.?S\.?', r'Master', r'MBA', r'M\.?B\.?A\.?',
+        r'PhD', r'Ph\.?D\.?', r'Doctorate', r'Diploma'
+    ]
+
+    for line in education_lines:
+        # Check if line contains degree
+        if any(re.search(pattern, line, re.IGNORECASE) for pattern in degree_patterns):
+            # Clean and add
+            cleaned = re.sub(r'\s+', ' ', line).strip()
+            if len(cleaned) > 5 and cleaned not in education:
+                education.append(cleaned)
+
+    # If no education found in section, try global search for degrees
+    if not education:
+        for pattern in degree_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                # Get surrounding context (±50 chars)
+                start = max(0, match.start() - 50)
+                end = min(len(text), match.end() + 50)
+                context = text[start:end].strip()
+                # Extract just the line
+                line = context.split('\n')[0] if '\n' in context else context
+                cleaned = re.sub(r'\s+', ' ', line).strip()
+                if len(cleaned) > 5 and cleaned not in education:
+                    education.append(cleaned)
+                    break  # One per pattern
+
+    return education if education else ["Education details not specified"]
 
 
 def extract_experience(text):
-    doc = nlp(text)
+    """Extract work experience with better section detection"""
     experiences = []
-    job_titles = ["Engineer", "Developer", "Manager", "Analyst", "Consultant", "Designer", "Architect", "Lead",
-                  "Director", "Specialist", "Coordinator"]
-    for token in doc:
-        if any(j.lower() in token.text.lower() for j in job_titles):
-            experiences.append(token.text)
-    # Extract total years
     total_years = 0
-    current_year = datetime.now().year
-    date_patterns = [
-        r'(\d{4})\s*[-—–]\s*(\d{4}|Present|Current|Till date)',
-        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\s*[-—–]\s*(?:[A-Za-z]+\s+)?(\d{4}|Present|Current)'
+
+    # Split text into lines
+    lines = text.split('\n')
+
+    # Find experience section
+    experience_section_found = False
+    experience_lines = []
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+
+        # Detect experience section start
+        if any(keyword in line_lower for keyword in
+               ['experience', 'work history', 'employment', 'professional experience']):
+            if len(line_lower) < 50:  # Likely a header
+                experience_section_found = True
+                continue
+
+        # Stop if we hit another major section
+        if experience_section_found and any(keyword in line_lower for keyword in
+                                            ['education', 'project', 'skill', 'certification', 'achievement',
+                                             'academic']):
+            if len(line_lower) < 50:  # Likely a header
+                break
+
+        if experience_section_found and line.strip():
+            experience_lines.append(line.strip())
+
+    # Extract job titles and companies
+    job_title_patterns = [
+        r'(?:Software|Data|ML|AI|Senior|Junior|Lead|Principal)\s+(?:Engineer|Developer|Analyst|Scientist)',
+        r'(?:Full Stack|Backend|Frontend|DevOps|Cloud)\s+(?:Engineer|Developer)',
+        r'(?:Manager|Director|Architect|Consultant|Specialist|Coordinator)',
+        r'(?:Intern|Internship|Trainee)',
     ]
+
+    for line in experience_lines:
+        # Check if line contains job title
+        if any(re.search(pattern, line, re.IGNORECASE) for pattern in job_title_patterns):
+            cleaned = re.sub(r'\s+', ' ', line).strip()
+            if len(cleaned) > 5 and cleaned not in experiences:
+                experiences.append(cleaned)
+
+    # Extract total years of experience
+    current_year = datetime.now().year
+
+    # Look for date ranges in experience section
+    date_patterns = [
+        r'(\d{4})\s*[-—–]\s*(\d{4}|Present|Current|Till\s+date|Now)',
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{4})\s*[-—–]\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(\d{4}|Present|Current|Now)'
+    ]
+
     year_ranges = []
+    experience_text = '\n'.join(experience_lines)
+
     for pattern in date_patterns:
-        matches = re.findall(pattern, text, re.I)
-        for start, end in matches:
-            start_year = int(start)
-            end_year = current_year if end.lower() in ["present", "current", "till date"] else int(end)
-            if 1980 <= start_year <= end_year <= current_year + 5:
-                year_ranges.append((start_year, end_year))
+        matches = re.findall(pattern, experience_text, re.IGNORECASE)
+        for match in matches:
+            try:
+                start = match[0] if match[0].isdigit() else match[1]
+                end = match[1] if len(match) > 1 else match[0]
+
+                start_year = int(start)
+                end_year = current_year if any(
+                    keyword in end.lower() for keyword in ['present', 'current', 'till', 'now']) else int(end)
+
+                if 1980 <= start_year <= end_year <= current_year + 1:
+                    year_ranges.append((start_year, end_year))
+            except:
+                continue
+
+    # Merge overlapping ranges
     if year_ranges:
         year_ranges.sort()
         merged_ranges = [year_ranges[0]]
         for start, end in year_ranges[1:]:
-            if start <= merged_ranges[-1][1]:
+            if start <= merged_ranges[-1][1] + 1:  # Allow 1 year gap
                 merged_ranges[-1] = (merged_ranges[-1][0], max(end, merged_ranges[-1][1]))
             else:
                 merged_ranges.append((start, end))
         total_years = sum(end - start for start, end in merged_ranges)
+
     return experiences if experiences else ["Experience not specified"], total_years
 
 
 def extract_certifications(text):
-    cert_keywords = ["AWS Certified", "Microsoft Certified", "Google Cloud", "Oracle Certified", "PMP", "CISSP",
-                     "CompTIA", "Certification"]
-    certs = [line.strip() for line in text.split("\n") if any(k.lower() in line.lower() for k in cert_keywords)]
-    return certs if certs else ["No certifications found"]
+    """Extract certifications with better section detection"""
+    certifications = []
+
+    # Split text into lines
+    lines = text.split('\n')
+
+    # Find certification section
+    cert_section_found = False
+    cert_lines = []
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+
+        # Detect certification section start
+        if any(keyword in line_lower for keyword in
+               ['certification', 'certificate', 'achievement', 'award', 'license']):
+            if len(line_lower) < 50:  # Likely a header
+                cert_section_found = True
+                continue
+
+        # Stop if we hit another major section
+        if cert_section_found and any(keyword in line_lower for keyword in
+                                      ['education', 'experience', 'work history', 'project', 'skill', 'personal',
+                                       'declaration']):
+            if len(line_lower) < 50:  # Likely a header
+                break
+
+        if cert_section_found and line.strip():
+            cert_lines.append(line.strip())
+
+    # Extract certifications from section
+    cert_keywords = [
+        'AWS', 'Azure', 'Google Cloud', 'GCP', 'Microsoft', 'Oracle',
+        'Cisco', 'CompTIA', 'PMP', 'CISSP', 'CEH', 'CCNA', 'CCNP',
+        'Certified', 'Certification', 'Certificate', 'Professional'
+    ]
+
+    for line in cert_lines:
+        # Check if line contains certification keywords
+        if any(keyword.lower() in line.lower() for keyword in cert_keywords):
+            # Skip section headers
+            if len(line) < 100 and line.lower() not in ['certifications', 'certificates', 'achievements']:
+                cleaned = re.sub(r'\s+', ' ', line).strip()
+                # Remove bullet points
+                cleaned = re.sub(r'^[•●○■□▪▫–—]\s*', '', cleaned)
+                if len(cleaned) > 10 and cleaned not in certifications:
+                    certifications.append(cleaned)
+
+    # If no certifications found in section, try global search
+    if not certifications:
+        for keyword in ['AWS Certified', 'Microsoft Certified', 'Google Cloud', 'Oracle Certified', 'Cisco Certified']:
+            pattern = re.escape(keyword) + r'[^.\n]{0,100}'
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches[:1]:  # Limit to 1 per keyword
+                cleaned = re.sub(r'\s+', ' ', match).strip()
+                if cleaned not in certifications:
+                    certifications.append(cleaned)
+
+    return certifications if certifications else ["No certifications found"]
 
 
 def parse_resume_nlp(text):
+    """Parse resume with section-aware extraction"""
     parsed = {}
     parsed['contact_info'] = extract_contact_info(text)
     parsed['skills'] = extract_skills(text)
     parsed['education'] = extract_education(text)
     parsed['experience'], parsed['total_experience_years'] = extract_experience(text)
     parsed['certifications'] = extract_certifications(text)
+
+    # Add section detection summary
+    parsed['sections_found'] = []
+    text_lower = text.lower()
+    if any(kw in text_lower for kw in ['skill', 'technical']):
+        parsed['sections_found'].append('Skills')
+    if any(kw in text_lower for kw in ['education', 'academic']):
+        parsed['sections_found'].append('Education')
+    if any(kw in text_lower for kw in ['experience', 'employment']):
+        parsed['sections_found'].append('Experience')
+    if any(kw in text_lower for kw in ['certification', 'achievement']):
+        parsed['sections_found'].append('Certifications')
+
     return parsed
 
 
@@ -340,10 +567,47 @@ if resume_text and model_path and os.path.exists(model_path):
                                    len([c for c in parsed['certifications'] if c != "No certifications found"]))
 
                 # Tabs
-                tab1, tab2 = st.tabs(["📄 Parsed Resume", "💡 Suggestions"])
+                tab1, tab2, tab3 = st.tabs(["📄 Parsed Resume", "💡 Suggestions", "🔍 Section Detection"])
                 with tab1:
                     st.subheader("Extracted Details")
-                    st.json(parsed)
+
+                    # Display contact info
+                    if parsed['contact_info']:
+                        st.markdown("**📧 Contact Information:**")
+                        st.json(parsed['contact_info'])
+
+                    # Display skills
+                    st.markdown("**🎯 Skills:**")
+                    if parsed['skills'] and parsed['skills'][0] != "Skills not specified":
+                        st.write(", ".join(parsed['skills']))
+                    else:
+                        st.info("No skills detected")
+
+                    # Display education
+                    st.markdown("**🎓 Education:**")
+                    if parsed['education'] and parsed['education'][0] != "Education details not specified":
+                        for edu in parsed['education']:
+                            st.write(f"• {edu}")
+                    else:
+                        st.info("No education details detected")
+
+                    # Display experience
+                    st.markdown("**💼 Experience:**")
+                    if parsed['experience'] and parsed['experience'][0] != "Experience not specified":
+                        for exp in parsed['experience']:
+                            st.write(f"• {exp}")
+                    else:
+                        st.info("No experience detected")
+                    st.write(f"**Total Years:** {parsed['total_experience_years']} years")
+
+                    # Display certifications
+                    st.markdown("**📜 Certifications:**")
+                    if parsed['certifications'] and parsed['certifications'][0] != "No certifications found":
+                        for cert in parsed['certifications']:
+                            st.write(f"• {cert}")
+                    else:
+                        st.info("No certifications detected")
+
                 with tab2:
                     st.subheader("Suggestions to Improve Salary")
                     if parsed['total_experience_years'] < 5:
@@ -354,6 +618,23 @@ if resume_text and model_path and os.path.exists(model_path):
                         st.info("📜 Consider getting certifications to boost your profile.")
                     if len(parsed['education']) < 2:
                         st.info("🎓 Highlight all educational achievements.")
+
+                with tab3:
+                    st.subheader("Resume Section Detection")
+                    if 'sections_found' in parsed:
+                        st.write("**Sections detected in your resume:**")
+                        for section in parsed['sections_found']:
+                            st.success(f"✅ {section} section found")
+
+                        all_sections = ['Skills', 'Education', 'Experience', 'Certifications']
+                        missing = [s for s in all_sections if s not in parsed['sections_found']]
+                        if missing:
+                            st.write("\n**Missing sections:**")
+                            for section in missing:
+                                st.warning(f"⚠️ {section} section not clearly identified")
+
+                    st.info(
+                        "💡 **Tip:** Use clear section headers like 'SKILLS', 'EDUCATION', 'EXPERIENCE', 'CERTIFICATIONS' to improve parsing accuracy.")
             except Exception as e:
                 st.error(f"Failed to predict salary. Please check your model file.")
 else:
